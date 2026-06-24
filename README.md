@@ -1,4 +1,4 @@
-# CodeSync — Real-time Collaborative Code Editor
+# Codalong — Real-time Collaborative Code Editor
 
 A browser-based collaborative code editor where multiple users can write and execute JavaScript together in real time. Changes from every participant are merged instantly using CRDT-based sync, with live cursors showing exactly where each person is editing.
 
