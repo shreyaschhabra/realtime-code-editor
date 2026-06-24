@@ -1,0 +1,181 @@
+# CodeSync — Real-time Collaborative Code Editor
+
+A browser-based collaborative code editor where multiple users can write and execute JavaScript together in real time. Changes from every participant are merged instantly using CRDT-based sync, with live cursors showing exactly where each person is editing.
+
+---
+
+## Features
+
+- **Real-time collaboration** — Multiple users edit the same document simultaneously. Changes sync in milliseconds via WebSockets.
+- **CRDT conflict resolution** — Built on [Yjs](https://github.com/yjs/yjs). Two people typing at the same time never lose each other's work — edits are mathematically merged, not overwritten.
+- **Live cursors** — Each collaborator's cursor appears in the editor with their name and a unique color, updated in real time.
+- **Authentication** — Username and password sign-up / login. Passwords are hashed with bcrypt, sessions managed via JWT (7-day expiry).
+- **Room system** — Create a room (generates a UUID) or join one by pasting its ID. Share the ID with anyone to collaborate instantly.
+- **JavaScript execution** — Run the editor's code and see `console.log` output and errors in a panel below. No external API — powered by Node.js's built-in `vm` module.
+- **CodeMirror 6 editor** — Syntax highlighting, auto-close brackets, line numbers, One Dark theme, monospace font.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 17, React Router v6, react-hot-toast |
+| Code editor | CodeMirror 6 (`codemirror`, `@codemirror/lang-javascript`, `@codemirror/theme-one-dark`) |
+| Real-time sync | Socket.IO v4 (WebSockets) |
+| CRDT engine | Yjs (`yjs`, `y-protocols`, `y-codemirror.next`) |
+| Backend | Node.js, Express |
+| Auth | bcryptjs (password hashing), jsonwebtoken (JWT) |
+| Code execution | Node.js built-in `vm` module — no external API or key needed |
+
+---
+
+## Architecture
+
+```
+Browser A                    Express Server                  Browser B
+─────────                    ──────────────                  ─────────
+  │                               │                               │
+  │── socket: join(roomId) ──────>│                               │
+  │<─ socket: yjs-init(state) ────│                               │
+  │                               │<──── socket: join(roomId) ───│
+  │                               │───── socket: yjs-init ───────>│
+  │                               │                               │
+  │ [user types]                  │                               │
+  │── socket: yjs-update ────────>│── socket: yjs-update ────────>│
+  │                               │   (Yjs merges on each side)   │
+  │── socket: awareness-update ──>│── socket: awareness-update ──>│
+  │                               │   (cursor positions synced)   │
+  │── POST /api/execute ─────────>│                               │
+  │<─ { output, error } ──────────│  (vm runs JS, returns result) │
+```
+
+**Key design decisions:**
+
+- **Yjs CRDTs over last-write-wins** — The naive approach (broadcast the full code string on every keystroke) breaks when two users type simultaneously — one person's work gets overwritten. Yjs uses a Conflict-free Replicated Data Type that guarantees all clients converge to the same document regardless of network order or simultaneous edits.
+- **In-memory state** — User accounts and Yjs documents live in server-side `Map`s. No database dependency, no infrastructure beyond the Node.js process. Accounts reset on server restart — an intentional tradeoff for a simple, zero-config deployment.
+- **Single deployment** — Express serves the built React app as static files. Frontend and backend share one URL, one process, zero CORS configuration in production.
+- **`vm` for sandboxed execution** — Node.js's built-in `vm` module runs submitted JavaScript in an isolated context. `console` is intercepted to capture output, and a 5-second timeout kills infinite loops. No API keys, no third-party services.
+- **Awareness protocol** — Cursor positions use Yjs's awareness protocol (`y-protocols/awareness`). When a user disconnects, their cursor is explicitly removed so stale cursors never linger.
+
+---
+
+## Project Structure
+
+```
+realtime-code-editor/
+├── server.js              # Entire backend: Express, Socket.IO, Yjs, auth, JS execution
+├── package.json
+├── .env.example           # Documents all environment variables
+└── src/
+    ├── App.js             # React app shell — two routes (/ and /editor/:roomId)
+    ├── App.css            # All styles — dark theme throughout
+    └── pages/
+        ├── Auth.js        # Login, register, and room dashboard in one file
+        └── EditorPage.js  # CodeMirror 6 editor, Yjs sync, cursors, output panel
+```
+
+---
+
+## Local Development
+
+### Prerequisites
+
+- Node.js 16+
+- npm
+
+### Setup
+
+```bash
+# Clone the repo
+git clone https://github.com/shreyaschhabra/realtime-code-editor.git
+cd realtime-code-editor
+
+# Install dependencies
+npm install
+```
+
+### Run locally
+
+Open two terminals:
+
+```bash
+# Terminal 1 — React dev server on port 3000
+REACT_APP_BACKEND_URL=http://localhost:5000 npm run start:front
+
+# Terminal 2 — Express + Socket.IO server on port 5000
+npm run server:dev
+```
+
+Open `http://localhost:3000`, register an account, create a room, and open the same Room ID in another tab to test real-time collaboration.
+
+---
+
+## Deployment
+
+Everything deploys as **one service**. Express serves the built React app, so there is a single URL for both frontend and backend.
+
+### Render (recommended — free tier available)
+
+1. Push this repo to GitHub.
+2. Go to [render.com](https://render.com) → **New → Web Service** → connect your repo.
+3. Set the following:
+   - **Build Command**: `npm run build`
+   - **Start Command**: `node server.js`
+4. Add one environment variable:
+
+   | Key | Value |
+   |---|---|
+   | `JWT_SECRET` | Any long random string (run `openssl rand -base64 32` to generate one) |
+
+5. Click **Deploy**.
+
+Render gives you a URL like `https://your-app.onrender.com` — that single URL serves the React frontend and handles all API and WebSocket connections.
+
+> **Free tier note**: Render's free tier sleeps after 15 minutes of inactivity and takes ~30 seconds to wake on the first request. Open the app a minute before showing it as a demo.
+
+### Other compatible platforms
+
+The same build + start commands work identically on **Railway**, **Fly.io**, **Heroku**, and **DigitalOcean App Platform**.
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `JWT_SECRET` | **Yes** | Secret key for signing JWTs. Must be a long random string in production. |
+| `PORT` | No | Port the server listens on. Defaults to `5000`. Most platforms set this automatically. |
+| `REACT_APP_BACKEND_URL` | No | Only needed for split deployments (frontend and backend on different URLs). Leave unset for single-service deployments — the app uses the same origin automatically. |
+| `FRONTEND_URL` | No | Only needed for split deployments to configure CORS on the backend. Leave unset for single-service deployments. |
+
+---
+
+## How Real-time Sync Works
+
+1. A user joins a room → server sends the full current Yjs document state (`yjs-init`).
+2. Every local keystroke produces a compact Yjs *update* — a binary diff, not the full document.
+3. The update is sent via `yjs-update` to the server, which applies it to the server-side `Y.Doc` and broadcasts it to all other clients in the room.
+4. Each client applies incoming updates to its own `Y.Doc`. Yjs guarantees convergence — all clients reach the same text regardless of the order updates arrive.
+5. The `y-codemirror.next` binding keeps the CodeMirror editor in sync with the `Y.Text` automatically.
+
+## How Code Execution Works
+
+When **Run JS** is clicked:
+
+1. The editor's content is sent to `POST /api/execute` with a JWT in the `Authorization` header.
+2. The server runs the code in `vm.runInNewContext` with a custom `console` that captures all `log`, `warn`, and `error` calls into an array.
+3. A 5-second timeout kills synchronous infinite loops.
+4. Captured output and any thrown error are returned as JSON and displayed in the output panel.
+
+```js
+console.log('hello', 42);   // → "hello 42"
+console.error('oops');      // → "[error] oops"
+// Uncaught errors appear in the Error section
+```
+
+---
+
+## Author
+
+**Shreyas Chhabra** — [github.com/shreyaschhabra](https://github.com/shreyaschhabra)
